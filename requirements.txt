@@ -1,2 +1,8 @@
 tensorflow
 opencv
+pyautogui
+pynput
+autopep8
+psutil
+pygetwindow
+pyobjc
