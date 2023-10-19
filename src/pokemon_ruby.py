@@ -1,62 +1,93 @@
-from .character_controller import CharacterController
-from .memory_manager import MemoryManager, POKEMON_LEVEL_ADDRESS, ITEM_COUNT_ADDRESS
-from .gui_handler import GUIHandler
+from .bizhawk.BHServer import BHServer
+from .reinforcement_learning.dqn_algorithm import DQNAgent
+from .preprocessing.image_processing import preprocess_image, image_array_to_hash
+from datetime import datetime, timedelta
 
-import argparse
-import ctypes
-import psutil
-
-
-def get_process_pid(window_title):
-    for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'] and window_title.lower() in proc.info['name'].lower():
-            return proc.info['pid']
-    return None
+import numpy as np
 
 
-parser = argparse.ArgumentParser(
-    description="Especificar el título de la ventana del emulador.")
-parser.add_argument("--window_name", type=str, default="VisualBoyAdvance",
-                    help="El título de la ventana del emulador. Default es 'VisualBoyAdvance-M 2.1.6'.")
-args = parser.parse_args()
 
-print(f'args: {args}')
+# State, Action, Batch
+# Debería coincidir con las dimensiones del estado que el agente debe considerar.
+state_size = 4
+# Número de acciones posibles: moverse en 4 direcciones, A, B, Select, Start
+action_size = 4
+batch_size = 32
 
-# Constantes para OpenProcess en caso de ser Windows
-PROCESS_ALL_ACCESS = 0x1F0FFF
+start_time = datetime.now()
+max_duration = timedelta(hours=1) # Duración máxima de una partida
+visited_areas = set()
 
-# Obtener PID de forma dinámica
-pid = get_process_pid(args.window_name)
-if pid is None:
-    print(
-        f"No se pudo encontrar el proceso con el título de la ventana {args.window_name}.")
-    exit(1)
+server = BHServer(
+    # Configuración del servidor
+    ip="127.0.0.1",
+    port=1337,
+    # Configuración de datos
+    use_grayscale=False,
+    system="GBA",
+    # Configuración del cliente
+    update_interval=5,
+    speed=100,
+    rom="ROM/Pokemon - Ruby Version.gba",
+    saves={"Save/Pokemon - Ruby.mGBA.QuickSave1.State": 1}
+)
 
-# Obtener process_handle
-process_handle = ctypes.windll.kernel32.OpenProcess(
-    PROCESS_ALL_ACCESS, False, pid)
+agent = DQNAgent(state_size, action_size)
 
-# Verificar que se pudo obtener el identificador del proceso
-if not process_handle:
-    print("Couldn\'t find screen name or PID of VisualBoyAdvance.")
-    exit(1)
+def calculate_reward(current_image_hash):
+        if current_image_hash in visited_areas:
+            return 0
+        else:
+            visited_areas.add(current_image_hash)
+            return 1
 
-# Inicializar clases
-character = CharacterController()
-memory_manager = MemoryManager(process_handle)
-gui_handler = GUIHandler("VisualBoyAdvance", pid)
+def image_to_hash(image):
+    return hash(image.tobytes())
 
-# Bucle principal
-while True:
-    print(f'Starting the AI with PID: {pid}')
-    screen = gui_handler.capture_screen()
-    if (screen is None):
-        print('We couldn\'t detect the screen')
-        exit(1)
+def compute_image_hash(image):
+    return str(imagehash.average_hash(image))
 
-    pokemon_level = memory_manager.read_memory(POKEMON_LEVEL_ADDRESS)
-    print('Screen and memory manager created successfully')
-    if pokemon_level < 10:
-        character.move_up()
-    else:
-        character.interact()
+def check_terminal_condition(current_time, start_time, max_duration):
+    return (current_time - start_time) >= max_duration  
+
+def main():
+    server.start()
+    print("Server started")
+
+    def update_function(self):
+        print("Updating server")
+        current_time = datetime.now()
+        done = check_terminal_condition(current_time)
+
+        last_screenshot_key = max(self.screenshots.keys())
+        screenshot = self.screenshots[last_screenshot_key]
+        current_state = preprocess_image(screenshot)
+
+        current_image_hash = image_array_to_hash(screenshot)
+
+        action = agent.act(current_state)
+        reward = calculate_reward(current_image_hash)
+
+        next_screenshot_key = max(self.screenshots.keys())
+        next_screenshot = self.screenshots[next_screenshot_key]
+        next_state = preprocess_image(next_screenshot)
+
+        agent.remember(current_state, action, reward, next_state, done)
+
+        if len(agent.memory) > batch_size:
+            agent.replay(batch_size)
+
+        control_settings = [
+            {"Up": True, "Down": False, "Left": False, "Right": False},
+            {"Up": False, "Down": True, "Left": False, "Right": False},
+            {"Up": False, "Down": False, "Left": True, "Right": False},
+            {"Up": False, "Down": False, "Left": False, "Right": True},
+        ]
+
+        setattr(self, 'controls', control_settings[action])
+
+    BHServer.update = update_function
+
+
+if __name__ == "__main__":
+    main()
